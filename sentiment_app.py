@@ -43,6 +43,8 @@ def load_data(uploaded_file):
 
 def preprocess_data(data, text_col):
     data_copy = data.copy()
+    if data[text_col].dtype != 'O':  # 'O' veri tipi metin (object) tipine karşılık gelir
+        raise ValueError(f"Column '{text_col}' must contain text data only.")
     if data_copy[text_col].dtype == 'O':
         data_copy[text_col] = data_copy[text_col].str.lower()
         data_copy[text_col] = data_copy[text_col].str.replace('[^\w\s]', '', regex=True)
@@ -663,7 +665,7 @@ def main():
     st.write("")
     st.write("")
     st.write("")
-    st.sidebar.info(st.info("Created by [Çiğdem Sıcakyüz]"))
+    st.info("Created by [Çiğdem Sıcakyüz]")
 
 if __name__ == "__main__":
     main()
