@@ -2,16 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import nltk
-from os import path
 import io
 from PIL import Image
 import altair as alt
 from nltk import WordNetLemmatizer, SnowballStemmer
+from scipy.stats import ttest_ind, chi2_contingency
+from sklearn.compose import ColumnTransformer
 from wordcloud import WordCloud, STOPWORDS
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder,StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from textblob import TextBlob
 from nltk.corpus import stopwords
@@ -25,7 +27,7 @@ import emoji
 import re
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import warnings
-
+st.set_option('deprecation.showPyplotGlobalUse', False)
 
 warnings.filterwarnings('ignore')
 
@@ -40,11 +42,182 @@ def load_data(uploaded_file):
             data = pd.read_csv(uploaded_file, sep="\t")
         return data
     return None
+@st.cache_resource
+def parse_custom_date(date_str):
+    try:
+        if pd.isnull(date_str):
+            return np.nan
+        parts = date_str.split()
+        day = parts[0].strip('stndrh,')
+        month = parts[1]
+        year = parts[2]
+        months = {
+            'January': '01', 'February': '02', 'March': '03', 'April': '04',
+            'May': '05', 'June': '06', 'July': '07', 'August': '08',
+            'September': '09', 'October': '10', 'November': '11', 'December': '12'
+        }
+        month = months[month]
+        new_date_str = f'{year}-{month}-{day}'
+        return pd.Timestamp(new_date_str)
+    except Exception as e:
+        st.warning(f"Error processing date string '{date_str}': {e}")
+        return np.nan
+
+@st.cache_resource
+def date_to_target(df, date_columns):
+    for column in date_columns:
+        df[column] = pd.to_datetime(df[column], errors='coerce')
+        df[column + '_Year'] = df[column].dt.year
+        df[column + '_Month'] = df[column].dt.month
+        df[column + '_Day'] = df[column].dt.day
+        df.drop(column, axis=1, inplace=True)
+    return df
+@st.cache_resource
+def clean_data(data):
+    drop_cols = ['Unnamed: 0', 'ReviewBody', 'ReviewHeader']
+    if all(col in data.columns for col in drop_cols):
+        data.drop(columns=drop_cols, inplace=True)
+    data.set_index('Name', inplace=True)
+
+    if data.isnull().sum().sum() > 0:
+        data.dropna(inplace=True)
+
+    if 'OverallRating' in data.columns:
+        data = data[data['OverallRating'].isin([1, 2, 3, 4, 5])]
+
+    date_columns = [col for col in data.columns if 'Date' in col]
+    data = date_to_target(data, date_columns)
+
+    return data, data.select_dtypes(include=['object', 'category']).columns.tolist(), data.columns.tolist()
+
+@st.cache_resource
+def analyze_data(df, selected_cols, target_col):
+    for selected_col in selected_cols:
+        unique_count = df[selected_col].nunique()
+        plt.figure(figsize=(12, 8))
+        if unique_count < 10:
+            sns.countplot(x=selected_col, data=df, palette='viridis')
+            plt.title(f'Count of {selected_col}')
+        else:
+            value_counts = df[selected_col].value_counts(normalize=True)
+            top_values = value_counts.head(20)
+            top_values.plot(kind='bar', color='skyblue')
+            plt.title(f'Percentage of Top 20 {selected_col}')
+            plt.xlabel(selected_col)
+            plt.ylabel('Percentage')
+        st.pyplot(plt)
+        plt.close()
+
+@st.cache_resource
+def determine_encoding(df):
+    return df.select_dtypes(include=['object', 'category']).columns.tolist()
+
+@st.cache_resource
+def encode_and_scale_data(X_train):
+    numeric_cols_train = X_train.select_dtypes(include=['number']).columns.tolist()
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numeric_cols_train)
+        ]
+    )
+    return preprocessor
+
+def convert_to_dataframe(data):
+    if isinstance(data, np.ndarray):
+        return pd.DataFrame(data)
+    return data
+
+@st.cache_resource
+def perform_categorical_analysis(df, selected_cols, target_col):
+    if isinstance(target_col, list):
+        target_col = target_col[0]
+    if target_col in df.columns:
+        hue_col = df[target_col].astype(str)
+        for selected_col in selected_cols:
+            plt.figure(figsize=(12, 8))
+            sns.countplot(x=selected_col, hue=hue_col, data=df, palette='viridis')
+            plt.title(f'Count of {selected_col} by {target_col}')
+            plt.xticks(rotation=45)
+            plt.legend(title=target_col, loc='upper right')
+            st.pyplot(plt)
+            plt.close()
+    else:
+        st.warning('Please select a target column first.')
+
+def perform_analysis(df, target_col):
+    if df[target_col].dtype == 'object' or df[target_col].nunique() < 10:
+        perform_categorical_analysis(df, df.columns.tolist(), target_col)
+    else:
+        X = df.drop(columns=[target_col])
+        y = df[target_col]
+
+        numeric_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        categorical_features = X.select_dtypes(include=['object']).columns.tolist()
+
+        numeric_transformer = Pipeline(steps=[
+            ('scaler', StandardScaler())])
+
+        categorical_transformer = Pipeline(steps=[
+            ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', numeric_transformer, numeric_features),
+                ('cat', categorical_transformer, categorical_features)])
+
+        model = Pipeline(steps=[('preprocessor', preprocessor),
+                                ('classifier', RandomForestClassifier())])
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        categorical_cols = determine_encoding(df)
+        if target_col in categorical_cols:
+            categorical_cols.remove(target_col)
+        for col in categorical_cols:
+            X_train_unique = X_train[col].unique()
+            X_test_unique = X_test[col].unique()
+            if not set(X_test_unique).issubset(set(X_train_unique)):
+                missing_categories = set(X_test_unique) - set(X_train_unique)
+                st.warning(f"Found unknown categories {missing_categories} in column {col} during transform.")
+
+        model.fit(X_train, y_train)
+
+        score = model.score(X_test, y_test)
+        st.write(f"Model accuracy: {score}")
+
+def perform_hypothesis_tests(df, target_col):
+    if 'selected_cols' not in st.session_state:
+        st.warning('Please select categorical columns first.')
+        return
+    selected_cols = st.session_state['selected_cols']
+    if df[target_col].dtype == 'object' or df[target_col].nunique() < 10:
+        st.write("Performing Chi-Square Test for Categorical Data")
+        for selected_col in selected_cols:
+            if df[selected_col].nunique() < 10:
+                contingency_table = pd.crosstab(df[selected_col], df[target_col])
+                chi2, p, dof, ex = chi2_contingency(contingency_table)
+                st.write(f"Chi-Square Test for {selected_col} vs {target_col}")
+                st.write(f"Chi2: {chi2}, p-value: {p}")
+    else:
+        st.write("Performing T-Test for Numeric Data")
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+        for numeric_col in numeric_cols:
+            unique_values = df[target_col].unique()
+            if len(unique_values) == 2:
+                group1 = df[df[target_col] == unique_values[0]][numeric_col]
+                group2 = df[df[target_col] == unique_values[1]][numeric_col]
+                t_stat, p_val = ttest_ind(group1, group2)
+                st.write(f"T-Test for {numeric_col} vs {target_col}")
+                st.write(f"T-statistic: {t_stat}, p-value: {p_val}")
+
+
+################### SENTIMENT ANALYSIS and WORDCLOUD##############################
+
 
 def preprocess_data(data, text_col):
     data_copy = data.copy()
     if data[text_col].dtype != 'O':  # 'O' veri tipi metin (object) tipine karşılık gelir
-        raise ValueError(f"Column '{text_col}' must contain text data only.")
+        st.warning(f"Column '{text_col}' must contain text data only.")
     if data_copy[text_col].dtype == 'O':
         data_copy[text_col] = data_copy[text_col].str.lower()
         data_copy[text_col] = data_copy[text_col].str.replace('[^\w\s]', '', regex=True)
@@ -192,8 +365,6 @@ def plot_confusion_matrix_with_metrics(cm, labels, fp, fn, tp, tn):
         st.write(interpretation)
         st.write("You can add more information here if needed.")
 
-
-
 def display_metrics(precision, recall, accuracy, f1_score):
     st.write("### Evaluation Metrics:")
 
@@ -216,8 +387,6 @@ def display_metrics(precision, recall, accuracy, f1_score):
     st.write(f"F1 Score: {f1_score:.2f}")
     f1_score_widget = st.progress(f1_score)
     st.info("F1 Score is the harmonic mean of precision and recall. It's a balanced performance measure.")
-
-
 
 def analyze_sentiment(text, method, trained_model=None, vectorizer=None, label_encoder=None):
     if text.strip() == "":
@@ -320,7 +489,6 @@ def analyze_sentiment(text, method, trained_model=None, vectorizer=None, label_e
         st.error("Geçersiz yöntem. Lütfen 'VADER', 'TextBlob' veya 'Machine Learning' seçin.")
         return None, None, None, None, None  # Hata durumunu işaretleyerek None değerleri döndür
 
-
 def get_emoji_for_sentiment(predicted_label):
     sentiment_emojis = {
         "positive": "😄",
@@ -368,7 +536,6 @@ def visualize_sentiment_radar(prediction_proba, predicted_label, sentiment_score
     )
 
     st.altair_chart(chart + text)
-
 
 def plot_compound_score_distribution(data, text_col):
     if 'compound' in data.columns:
@@ -475,163 +642,242 @@ def interpret_confusion_matrix(fp, fn, tp, tn):
 def main():
     st.title("Sentiment Analysis and WordCloud Application")
 
-
     if 'data' not in st.session_state:
         st.session_state['data'] = None
+
     st.sidebar.markdown(
         f'<h3 style="color:yellow;">Upload File</h3>',
         unsafe_allow_html=True
     )
-    uploaded_file = st.sidebar.file_uploader("", type=["csv", "tsv"])
+
+    uploaded_file = st.sidebar.file_uploader("Upload your input CSV file", type=["csv", "tsv"])
     if uploaded_file:
         st.write("")
-
         st.session_state['data'] = load_data(uploaded_file)
         st.write("")
         st.write("")
         st.write("")
+        st.write(" Summary of the loaded data")
+        st.write("")
+        st.write("")
+        st.dataframe(st.session_state['data'].head())
 
-        if 'data' in st.session_state and st.session_state['data'] is not None:
-            st.success("Data loaded and preprocessed successfully.")
-            st.write(" Summary of the loaded data")
-            st.dataframe(st.session_state['data'].head())
-            st.info(f"Shape of data: {st.session_state['data'].shape}")
-            st.session_state['text_col'] = st.selectbox("Select the text column for analysis",
-                                                        st.session_state['data'].columns)
-            st.write("")
-            st.write("")
 
-            st.session_state['sentiment_col'] = st.selectbox("Select a column for Sentiment analysis:",
-                                                             st.session_state['data'].columns)
-            st.write("")
-            st.session_state['data'] = preprocess_data(st.session_state['data'], st.session_state['text_col'])
-
-    #st.sidebar.markdown("<h4 style='color: yellow;'>MENU</h4>", unsafe_allow_html=True)
+    # st.sidebar.markdown("<h4 style='color: yellow;'>MENU</h4>", unsafe_allow_html=True)
     st.sidebar.markdown(
         f'<h3 style="color:yellow;">Menu</h3>',
         unsafe_allow_html=True
     )
-    option = st.sidebar.selectbox("", ["Sentiment Analysis", "WordCloud"])
-    st.sidebar.text("")
-    if st.session_state['data'] is not None:
-        if option == "Sentiment Analysis":
-            st.sidebar.markdown(
-                f'<h3 style="color:yellow;">Pre-process</h3>',
-                unsafe_allow_html=True
-            )
 
-                  # Sidebar'da vectorizer seçeneklerini göster
-            st.sidebar.text("Select Vectorizer")
-            vectorizer_name = st.sidebar.radio("", ["TF-IDF", "Count Vectorizer"])
+    option = st.sidebar.selectbox("", ["Statistics", "Sentiment Analysis", "WordCloud"])
+    if 'data' in st.session_state and st.session_state['data'] is not None:
+        st.success("Data loaded successfully.")
+        st.write("")
+        st.write("")
 
-            # TF-IDF veya Count Vectorizer seçilmişse, n-gram aralığını seçme düğmelerini göster
-            if vectorizer_name in ["TF-IDF", "Count Vectorizer"]:
-                st.sidebar.text("Select N-gram Range:")
+        data = st.session_state['data'].copy()
 
-                # Min ve Max n-gram değerlerini tanımla
-                ngram_min = st.sidebar.number_input("Min", min_value=1, max_value=5, value=1)
-                ngram_max = st.sidebar.number_input("Max", min_value=ngram_min, max_value=5, value=ngram_min)
+        if option == "Statistics":
+            st.subheader("Preprocess")
+            if st.button("Clean Data"):
+                with st.spinner('Cleaning data...'):
+                    df = st.session_state['data'].copy()
+                    df, categorical_cols, target_cols = clean_data(df)
+                    st.session_state['cleaned_df'] = df
+                    st.session_state['categorical_cols'] = categorical_cols
+                    st.session_state['target_cols'] = target_cols
+                    st.success('Data successfully cleaned.')
+                    st.write("Cleaned Data:")
+                    st.dataframe(df.head())
 
-                ngram_range = (ngram_min, ngram_max)
-            else:
-                ngram_range = (1, 1)  # Diğer vectorizer seçenekleri için varsayılan olarak 1-gram aralığı kullan
-            st.sidebar.markdown("")
-            st.sidebar.markdown("")
-            st.sidebar.markdown(
-                f'<h3 style="color:yellow;">Model Training</h3>',
-                unsafe_allow_html=True
-            )
+            if 'cleaned_df' in st.session_state and st.session_state['cleaned_df'] is not None:
+                cleaned_df = st.session_state['cleaned_df']
 
-            st.sidebar.text("Select Model")
-            model_name = st.sidebar.selectbox("", ["Logistic Regression", "Naive Bayes", "Random Forest", "Support Vector Machine"])
+                st.write("")
+                st.write("")
 
-            if st.sidebar.button("Train Model"):
-                with st.spinner("Training the model..."):
-                    trained_model, vectorizer, label_encoder, accuracy, report = sentiment_analysis(
-                        st.session_state['data'], st.session_state['text_col'],st.session_state['sentiment_col'], vectorizer_name, model_name, ngram_range
-                    )
-                    st.session_state['trained_model'] = trained_model
-                    st.session_state['vectorizer'] = vectorizer
-                    st.session_state['label_encoder'] = label_encoder
-                    st.success("Training completed.")
-                    st.write("")
-                    st.write("")
-                    st.write("")
-                    st.session_state['accuracy'] = accuracy
-                    st.session_state['report'] = report
-                    st.write("")
-                    st.write("")
-                    st.write("")
 
-                    if report is not None:
+                st.markdown("<span style='color: yellow;'>Select target column for analysis</span>",
+                            unsafe_allow_html=True)
+                target_col = st.selectbox("", options=cleaned_df.columns,
+                                          key="target_column_select")
+
+                st.write("")
+                st.write("")
 
 
 
-                       # accuracy_percentage = float(st.session_state['accuracy']) * 100
-                        #st.write(f"Accuracy: {accuracy_percentage:.2f}%")
+                st.markdown("<span style='color: yellow;'>Select categorical column for analysis</span>",
+                            unsafe_allow_html=True)
+                selected_cols = st.multiselect('', cleaned_df.columns,
+                                               key='cat_cols')
 
-                        #progress_bar = st.progress(round(accuracy_percentage))
+                st.session_state['selected_cols'] = selected_cols
 
+                st.write("")
+                st.write("")
+                st.subheader("Data Analysis")
+
+                if st.button("Analyze Data"):
+                    if selected_cols:
+                        analyze_data(cleaned_df, selected_cols, target_col)
+                    else:
+                        st.warning('Please select at least one categorical column for analysis.')
+
+                st.write("")
+                st.write("")
+
+
+                if st.button("Perform Deep Analysis"):
+                    if target_col:
+                        perform_analysis(cleaned_df, target_col)
+                    else:
+                        st.warning('Please select a target column for analysis.')
+                st.write("")
+                st.write("")
+
+
+                st.subheader("Hypothesis Testing")
+
+                if st.button("Perform Hypothesis Tests"):
+                    if target_col:
+                        perform_hypothesis_tests(cleaned_df, target_col)
+                    else:
+                        st.warning('Please select a target column for hypothesis tests.')
+
+
+                if st.button("Reset"):
+                    st.session_state.clear()
+                    st.success("State has been reset.")
+
+        elif option == "Sentiment Analysis":
+            st.sidebar.markdown(f'<h3 style="color:yellow;">Pre-process</h3>',unsafe_allow_html=True)
+            data = st.session_state['data'].copy()
+
+            if 'data' in st.session_state and st.session_state['data'] is not None:
+
+                st.info(f"Shape of data: {st.session_state['data'].shape}")
+                st.session_state['text_col'] = st.selectbox("Select the text column for analysis",
+                                                                st.session_state['data'].columns)
+                st.write("")
+                st.write("")
+                st.session_state['sentiment_col'] = st.selectbox("Select a column for Sentiment analysis:",
+                                                                 st.session_state['data'].columns)
+                st.write("")
+                st.session_state['data'] = preprocess_data(st.session_state['data'], st.session_state['text_col'])
+
+                    # Sidebar'da vectorizer seçeneklerini göster
+                st.sidebar.text("Select Vectorizer")
+                vectorizer_name = st.sidebar.radio("", ["TF-IDF", "Count Vectorizer"])
+
+                    # TF-IDF veya Count Vectorizer seçilmişse, n-gram aralığını seçme düğmelerini göster
+                if vectorizer_name in ["TF-IDF", "Count Vectorizer"]:
+                    st.sidebar.text("Select N-gram Range:")
+
+                        # Min ve Max n-gram değerlerini tanımla
+                    ngram_min = st.sidebar.number_input("Min", min_value=1, max_value=5, value=1)
+                    ngram_max = st.sidebar.number_input("Max", min_value=ngram_min, max_value=5, value=ngram_min)
+
+                    ngram_range = (ngram_min, ngram_max)
+                else:
+                    ngram_range = (1, 1)  # Diğer vectorizer seçenekleri için varsayılan olarak 1-gram aralığı kullan
+                st.sidebar.markdown("")
+                st.sidebar.markdown("")
+                st.sidebar.markdown(
+                    f'<h3 style="color:yellow;">Model Training</h3>',
+                    unsafe_allow_html=True                    )
+
+                st.sidebar.text("Select Model")
+                model_name = st.sidebar.selectbox("", ["Logistic Regression", "Naive Bayes", "Random Forest", "Support Vector Machine"])
+
+                if st.sidebar.button("Train Model"):
+                    with st.spinner("Training the model..."):
+                        trained_model, vectorizer, label_encoder, accuracy, report = sentiment_analysis(                                st.session_state['data'], st.session_state['text_col'],st.session_state['sentiment_col'], vectorizer_name, model_name, ngram_range
+                            )
+                        st.session_state['trained_model'] = trained_model
+                        st.session_state['vectorizer'] = vectorizer
+                        st.session_state['label_encoder'] = label_encoder
+                        st.success("Training completed.")
                         st.write("")
+                        st.write("")
+                        st.write("")
+                        st.session_state['accuracy'] = accuracy
+                        st.session_state['report'] = report
+                        st.write("")
+                        st.write("")
+                        st.write("")
+                        if report is not None:
 
-                        #st.write("Classification Report:")
-                        #formatted_report = format_classification_report(st.session_state['report'])
-                        #st.write(formatted_report)
-                    else:
-                        st.warning("Classification report is missing. Please check your training process.")
+                            # accuracy_percentage = float(st.session_state['accuracy']) * 100
+                                #st.write(f"Accuracy: {accuracy_percentage:.2f}%")
 
-            if 'trained_model' in st.session_state and st.session_state['trained_model'] is not None:
-                st.write("")
-                st.write("")
-                st.write("")
-                st.write("")
+                                #progress_bar = st.progress(round(accuracy_percentage))
 
-                #method = st.radio("Select sentiment analysis method:", ('VADER', 'TextBlob'))
-                st.subheader("Predict a new comment")
-                text_input = st.text_input("Enter text for sentiment prediction:")
-                if st.button("Predict"):
-                    if text_input:
-                        st.markdown(f"<span style='color: grey;'>{text_input}</span>", unsafe_allow_html=True)
-
-                        # Machine Learning method
-                        prediction_proba_ml, _, _, predicted_label_ml, sentiment_score_ml = analyze_sentiment(
-                            text_input, 'Machine Learning', st.session_state['trained_model'],
-                            st.session_state['vectorizer'], st.session_state['label_encoder'])
-
-                        if prediction_proba_ml is not None:
                             st.write("")
-                            st.write("")
-                            st.write("")
-                            visualize_sentiment_radar(prediction_proba_ml, predicted_label_ml, sentiment_score_ml)
+
+                                #st.write("Classification Report:")
+                                #formatted_report = format_classification_report(st.session_state['report'])
+                                #st.write(formatted_report)
                         else:
-                            st.error("Error in analyzing sentiment.")
-                    else:
-                        st.warning("Please enter some text for sentiment prediction.")
+                            st.warning("Classification report is missing. Please check your training process.")
 
-            else:
-                st.warning("Model training failed. Please check your data and parameters.")
-            if st.button("Clear Results"):
-                st.session_state.pop('trained_model', None)
-                st.session_state.pop('vectorizer', None)
-                st.session_state.pop('label_encoder', None)
-                st.session_state.pop('accuracy', None)
-                st.session_state.pop('report', None)
-                st.success("Results cleared.")
+                if 'trained_model' in st.session_state and st.session_state['trained_model'] is not None:
+                    st.write("")
+                    st.write("")
+                    st.write("")
+                    st.write("")
+
+                    #method = st.radio("Select sentiment analysis method:", ('VADER', 'TextBlob'))
+                    st.subheader("Predict a new comment")
+                    text_input = st.text_input("Enter text for sentiment prediction:")
+                    if st.button("Predict"):
+                        if text_input:
+                            st.markdown(f"<span style='color: grey;'>{text_input}</span>", unsafe_allow_html=True)
+
+                            # Machine Learning method
+                            prediction_proba_ml, _, _, predicted_label_ml, sentiment_score_ml = analyze_sentiment(
+                                text_input, 'Machine Learning', st.session_state['trained_model'],
+                                st.session_state['vectorizer'], st.session_state['label_encoder'])
+
+                            if prediction_proba_ml is not None:
+                                st.write("")
+                                st.write("")
+                                st.write("")
+                                visualize_sentiment_radar(prediction_proba_ml, predicted_label_ml, sentiment_score_ml)
+                            else:
+                                st.error("Error in analyzing sentiment.")
+                        else:
+                            st.warning("Please enter some text for sentiment prediction.")
+
+
+                    else:
+                        st.warning("Model training failed. Please check your data and parameters.")
+                if st.button("Clear Results"):
+                    st.session_state.pop('trained_model', None)
+                    st.session_state.pop('vectorizer', None)
+                    st.session_state.pop('label_encoder', None)
+                    st.session_state.pop('accuracy', None)
+                    st.session_state.pop('report', None)
+                    st.success("Results cleared.")
+
         elif option == "WordCloud":
             st.sidebar.markdown("<h4 style='color: yellow;'>Upload a mask image</h4>", unsafe_allow_html=True)
             mask_image_file = st.sidebar.file_uploader("", type=["png", "jpg", "jpeg"])
+            if 'data' in st.session_state and st.session_state['data'] is not None:
 
-            if st.sidebar.button("Generate WordCloud"):
+                if st.sidebar.button("Generate WordCloud"):
 
-                create_wordcloud(st.session_state['data'], st.session_state['text_col'])
+                    create_wordcloud(st.session_state['data'], st.session_state['text_col'])
 
-                if mask_image_file:
-                    st.image(mask_image_file)
-                    try:
-                        generate_wordcloud_with_mask(st.session_state['data'], st.session_state["text_col"],
-                                                     mask_image_file)
-                    except Exception as e:
-                        st.error(f"An error occurred: {str(e)}")
+                    if mask_image_file:
+                        st.image(mask_image_file)
+                        try:
+                            generate_wordcloud_with_mask(st.session_state['data'], st.session_state["text_col"],
+                                                         mask_image_file)
+                        except Exception as e:
+                            st.error(f"An error occurred: {str(e)}")
+
+
 
 
     else:
