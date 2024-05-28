@@ -10,5 +10,5 @@ vaderSentiment==3.3.2
 emoji~=1.4.2
 pillow~=10.3.0
 scipy~=1.13.0
-scikit-learn~=1.4.2
+scikit-learn~=1.5.0
 wordcloud~=1.9.3

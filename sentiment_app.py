@@ -1,32 +1,32 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import nltk
 import io
-from PIL import Image
-import altair as alt
-from nltk import WordNetLemmatizer, SnowballStemmer
-from scipy.stats import ttest_ind, chi2_contingency
-from sklearn.compose import ColumnTransformer
-from wordcloud import WordCloud, STOPWORDS
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder,StandardScaler
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from textblob import TextBlob
-from nltk.corpus import stopwords
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, classification_report,confusion_matrix,precision_score, recall_score
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import emoji
 import re
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import warnings
+import altair as alt
+import matplotlib.pyplot as plt
+import nltk
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import streamlit as st
+from PIL import Image
+from nltk import WordNetLemmatizer, SnowballStemmer
+from nltk.corpus import stopwords
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from scipy.stats import ttest_ind, chi2_contingency
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+from sklearn.svm import SVC
+from textblob import TextBlob
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from wordcloud import WordCloud, STOPWORDS
+
 st.set_option('deprecation.showPyplotGlobalUse', False)
 
 warnings.filterwarnings('ignore')
@@ -228,6 +228,7 @@ def perform_hypothesis_tests(df, target_col):
 
 def preprocess_data(data, text_col):
     data_copy = data.copy()
+
     if data[text_col].dtype != 'O':  # 'O' veri tipi metin (object) tipine karşılık gelir
         st.warning(f"Column '{text_col}' must contain text data only.")
     if data_copy[text_col].dtype == 'O':
@@ -765,16 +766,26 @@ def main():
         elif option == "Sentiment Analysis":
             st.sidebar.markdown(f'<h3 style="color:yellow;">Pre-process</h3>',unsafe_allow_html=True)
             data = st.session_state['data'].copy()
+            dropped_cols = ['Unnamed: 0', 'Name']
+            if all(col in st.session_state['data'].columns for col in dropped_cols):
+                st.session_state['data'].drop(columns=dropped_cols, inplace=True)
 
             if 'data' in st.session_state and st.session_state['data'] is not None:
-
+                st.write(st.session_state['data'].head())
                 st.info(f"Shape of data: {st.session_state['data'].shape}")
-                st.session_state['text_col'] = st.selectbox("Select the text column for analysis",
-                                                                st.session_state['data'].columns)
+
+                text_col_options = st.session_state['data'].select_dtypes(include=['object']).columns
+                st.session_state['text_col'] = st.selectbox("Select the text column for analysis", text_col_options)
+
                 st.write("")
                 st.write("")
+
+                sentiment_col_options = st.session_state['data'].select_dtypes(include=['category', 'object']).columns
                 st.session_state['sentiment_col'] = st.selectbox("Select a column for Sentiment analysis:",
-                                                                 st.session_state['data'].columns)
+                                                                 sentiment_col_options)
+                if len(st.session_state['data'][st.session_state['sentiment_col']].unique()) != 2:
+                    st.warning("Please select a binary (two-class) column for Sentiment analysis.")
+
                 st.write("")
                 st.session_state['data'] = preprocess_data(st.session_state['data'], st.session_state['text_col'])
 
@@ -797,7 +808,7 @@ def main():
                 st.sidebar.markdown("")
                 st.sidebar.markdown(
                     f'<h3 style="color:yellow;">Model Training</h3>',
-                    unsafe_allow_html=True                    )
+                    unsafe_allow_html=True)
 
                 st.sidebar.text("Select Model")
                 model_name = st.sidebar.selectbox("", ["Logistic Regression", "Naive Bayes", "Random Forest", "Support Vector Machine"])
