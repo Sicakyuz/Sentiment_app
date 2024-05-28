@@ -30,6 +30,18 @@ import warnings
 st.set_option('deprecation.showPyplotGlobalUse', False)
 
 warnings.filterwarnings('ignore')
+from nltk.corpus import wordnet
+
+def download_nltk_data():
+    try:
+        wordnet.ensure_loaded()
+    except LookupError:
+        nltk.download('wordnet')
+        nltk.download('omw-1.4')
+        nltk.download('stopwords')
+
+# Call this function before any other code in your script
+download_nltk_data()
 
 nltk.download('wordnet')
 nltk.download('stopwords')
