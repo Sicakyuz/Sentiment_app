@@ -1,4 +1,4 @@
-#!/Users/asmir/Desktop/NLP_Sentiment/venv/bin/python3.12
+#!/Users/asmir/Desktop/NLP_Sentiment/venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys

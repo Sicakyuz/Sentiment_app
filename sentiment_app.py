@@ -233,8 +233,8 @@ def preprocess_data(data, text_col):
         st.warning(f"Column '{text_col}' must contain text data only.")
     if data_copy[text_col].dtype == 'O':
         data_copy[text_col] = data_copy[text_col].str.lower()
-        data_copy[text_col] = data_copy[text_col].str.replace('[^\w\s]', '', regex=True)
-        data_copy[text_col] = data_copy[text_col].str.replace('\d', '', regex=True)
+        data_copy[text_col] = data_copy[text_col].str.replace(r'[^\w\s]', '', regex=True)
+        data_copy[text_col] = data_copy[text_col].str.replace(r'\d', '', regex=True)
         sw = set(stopwords.words('english'))
         data_copy[text_col] = data_copy[text_col].apply(lambda x: " ".join(word for word in x.split() if word not in sw))
         # Köklerin alınması (Opsiyonel)
@@ -374,7 +374,55 @@ def plot_confusion_matrix_with_metrics(cm, labels, fp, fn, tp, tn):
 
     # Expander
     with st.expander("Confusion Matrix Interpretation Details"):
-        st.write("This section provides details about the interpretation of the confusion matrix.")
+        st.markdown("""
+            ### Confusion Matrix Explanation
+
+            A confusion matrix is a performance measurement tool for machine learning classification problems. It is used to evaluate the performance of a classification model (or "classifier") on a set of test data for which the true values are known. The matrix itself is an n x n table, where n is the number of classes in the classification problem.
+
+            Here is an explanation of the confusion matrix for a binary classification problem (two classes: Positive and Negative):
+
+            | Actual / Predicted | Positive | Negative |
+            |--------------------|----------|----------|
+            | Positive           | True Positive (TP) | False Negative (FN) |
+            | Negative           | False Positive (FP) | True Negative (TN) |
+
+            **Key terms:**
+            - **True Positive (TP)**: The number of correct positive predictions.
+            - **True Negative (TN)**: The number of correct negative predictions.
+            - **False Positive (FP)**: The number of incorrect positive predictions.
+            - **False Negative (FN)**: The number of incorrect negative predictions.
+
+            **Important metrics derived from the confusion matrix:**
+            """)
+
+        st.markdown("1. **Accuracy**: The proportion of total predictions that were correct.")
+        st.latex(r"Accuracy = \frac{TP + TN}{TP + TN + FP + FN}")
+
+        st.markdown("2. **Precision**: The proportion of positive predictions that were correct.")
+        st.latex(r"Precision = \frac{TP}{TP + FP}")
+
+        st.markdown(
+            "3. **Recall (or True Positive Rate)**: The proportion of actual positives that were correctly predicted.")
+        st.latex(r"Recall = \frac{TP}{TP + FN}")
+
+        st.markdown("4. **F1 Score**: The harmonic mean of precision and recall.")
+        st.latex(r"F1 \ Score = \frac{2 \cdot Precision \cdot Recall}{Precision + Recall}")
+
+        st.markdown(
+            "5. **Specificity (or True Negative Rate)**: The proportion of actual negatives that were correctly predicted.")
+        st.latex(r"Specificity = \frac{TN}{TN + FP}")
+
+        st.markdown(
+            "6. **False Positive Rate (FPR)**: The proportion of actual negatives that were incorrectly predicted as positive.")
+        st.latex(r"FPR = \frac{FP}{FP + TN}")
+
+        st.markdown(
+            "7. **False Negative Rate (FNR)**: The proportion of actual positives that were incorrectly predicted as negative.")
+        st.latex(r"FNR = \frac{FN}{FN + TP}")
+
+        st.markdown("""
+            The confusion matrix provides a more detailed analysis of a classification model's performance compared to simple accuracy. It helps to understand the types of errors the model is making and whether it has a bias towards a particular class.
+            """)
         st.write(interpretation)
         st.write("You can add more information here if needed.")
 
@@ -426,7 +474,7 @@ def analyze_sentiment(text, method, trained_model=None, vectorizer=None, label_e
     if isinstance(vectorizer, (TfidfVectorizer, CountVectorizer)):
         X_vectorized = vectorizer.transform([processed_text])
     else:
-        st.error("Geçersiz vektörleştirici türü.")
+        st.error("Unvalid Vectorizer.")
         return None, None, None, None  # Hata durumunu işaretleyerek None değerleri döndür
 
     # Tahmini yap
@@ -502,14 +550,6 @@ def analyze_sentiment(text, method, trained_model=None, vectorizer=None, label_e
         st.error("Geçersiz yöntem. Lütfen 'VADER', 'TextBlob' veya 'Machine Learning' seçin.")
         return None, None, None, None, None  # Hata durumunu işaretleyerek None değerleri döndür
 
-def get_emoji_for_sentiment(predicted_label):
-    sentiment_emojis = {
-        "positive": "😄",
-        "neutral": "😐",
-        "negative": "😡"
-    }
-
-    return sentiment_emojis.get(predicted_label, "😕")
 
 def visualize_sentiment_radar(prediction_proba, predicted_label, sentiment_score):
 
@@ -652,6 +692,8 @@ def interpret_confusion_matrix(fp, fn, tp, tn):
     return interpretation
 
 
+
+
 def main():
     st.title("Sentiment Analysis and WordCloud Application")
 
@@ -665,28 +707,18 @@ def main():
 
     uploaded_file = st.sidebar.file_uploader("Upload your input CSV file", type=["csv", "tsv"])
     if uploaded_file:
-        st.write("")
         st.session_state['data'] = load_data(uploaded_file)
-        st.write("")
-        st.write("")
-        st.write("")
-        st.write(" Summary of the loaded data")
-        st.write("")
-        st.write("")
+        st.write("Summary of the loaded data")
         st.dataframe(st.session_state['data'].head())
 
-
-    # st.sidebar.markdown("<h4 style='color: yellow;'>MENU</h4>", unsafe_allow_html=True)
     st.sidebar.markdown(
         f'<h3 style="color:yellow;">Menu</h3>',
         unsafe_allow_html=True
     )
 
-    option = st.sidebar.selectbox("", ["Statistics", "Sentiment Analysis", "WordCloud"])
+    option = st.sidebar.selectbox("Select an option", ["Statistics", "Sentiment Analysis", "WordCloud"])
     if 'data' in st.session_state and st.session_state['data'] is not None:
         st.success("Data loaded successfully.")
-        st.write("")
-        st.write("")
 
         data = st.session_state['data'].copy()
 
@@ -706,29 +738,18 @@ def main():
             if 'cleaned_df' in st.session_state and st.session_state['cleaned_df'] is not None:
                 cleaned_df = st.session_state['cleaned_df']
 
-                st.write("")
-                st.write("")
-
-
                 st.markdown("<span style='color: yellow;'>Select target column for analysis</span>",
                             unsafe_allow_html=True)
-                target_col = st.selectbox("", options=cleaned_df.columns,
+                target_col = st.selectbox("Target column", options=cleaned_df.columns,
                                           key="target_column_select")
-
-                st.write("")
-                st.write("")
-
-
 
                 st.markdown("<span style='color: yellow;'>Select categorical column for analysis</span>",
                             unsafe_allow_html=True)
-                selected_cols = st.multiselect('', cleaned_df.columns,
+                selected_cols = st.multiselect('Categorical columns', cleaned_df.columns,
                                                key='cat_cols')
 
                 st.session_state['selected_cols'] = selected_cols
 
-                st.write("")
-                st.write("")
                 st.subheader("Data Analysis")
 
                 if st.button("Analyze Data"):
@@ -737,18 +758,11 @@ def main():
                     else:
                         st.warning('Please select at least one categorical column for analysis.')
 
-                st.write("")
-                st.write("")
-
-
                 if st.button("Perform Deep Analysis"):
                     if target_col:
                         perform_analysis(cleaned_df, target_col)
                     else:
                         st.warning('Please select a target column for analysis.')
-                st.write("")
-                st.write("")
-
 
                 st.subheader("Hypothesis Testing")
 
@@ -758,13 +772,12 @@ def main():
                     else:
                         st.warning('Please select a target column for hypothesis tests.')
 
-
                 if st.button("Reset"):
                     st.session_state.clear()
                     st.success("State has been reset.")
 
         elif option == "Sentiment Analysis":
-            st.sidebar.markdown(f'<h3 style="color:yellow;">Pre-process</h3>',unsafe_allow_html=True)
+            st.sidebar.markdown(f'<h3 style="color:yellow;">Pre-process</h3>', unsafe_allow_html=True)
             data = st.session_state['data'].copy()
             dropped_cols = ['Unnamed: 0', 'Name']
             if all(col in st.session_state['data'].columns for col in dropped_cols):
@@ -777,80 +790,46 @@ def main():
                 text_col_options = st.session_state['data'].select_dtypes(include=['object']).columns
                 st.session_state['text_col'] = st.selectbox("Select the text column for analysis", text_col_options)
 
-                st.write("")
-                st.write("")
-
                 sentiment_col_options = st.session_state['data'].select_dtypes(include=['category', 'object']).columns
                 st.session_state['sentiment_col'] = st.selectbox("Select a column for Sentiment analysis:",
                                                                  sentiment_col_options)
                 if len(st.session_state['data'][st.session_state['sentiment_col']].unique()) != 2:
                     st.warning("Please select a binary (two-class) column for Sentiment analysis.")
 
-                st.write("")
                 st.session_state['data'] = preprocess_data(st.session_state['data'], st.session_state['text_col'])
 
-                    # Sidebar'da vectorizer seçeneklerini göster
                 st.sidebar.text("Select Vectorizer")
-                vectorizer_name = st.sidebar.radio("", ["TF-IDF", "Count Vectorizer"])
+                vectorizer_name = st.sidebar.radio("Vectorizer", ["TF-IDF", "Count Vectorizer"])
 
-                    # TF-IDF veya Count Vectorizer seçilmişse, n-gram aralığını seçme düğmelerini göster
                 if vectorizer_name in ["TF-IDF", "Count Vectorizer"]:
                     st.sidebar.text("Select N-gram Range:")
-
-                        # Min ve Max n-gram değerlerini tanımla
-                    ngram_min = st.sidebar.number_input("Min", min_value=1, max_value=5, value=1)
-                    ngram_max = st.sidebar.number_input("Max", min_value=ngram_min, max_value=5, value=ngram_min)
-
+                    ngram_min = st.sidebar.number_input("Min n-gram", min_value=1, max_value=5, value=1)
+                    ngram_max = st.sidebar.number_input("Max n-gram", min_value=ngram_min, max_value=5, value=ngram_min)
                     ngram_range = (ngram_min, ngram_max)
                 else:
-                    ngram_range = (1, 1)  # Diğer vectorizer seçenekleri için varsayılan olarak 1-gram aralığı kullan
-                st.sidebar.markdown("")
-                st.sidebar.markdown("")
+                    ngram_range = (1, 1)  # Default to unigram for other vectorizers
+
                 st.sidebar.markdown(
                     f'<h3 style="color:yellow;">Model Training</h3>',
                     unsafe_allow_html=True)
 
                 st.sidebar.text("Select Model")
-                model_name = st.sidebar.selectbox("", ["Logistic Regression", "Naive Bayes", "Random Forest", "Support Vector Machine"])
+                model_name = st.sidebar.selectbox("Model", ["Logistic Regression", "Naive Bayes", "Random Forest", "Support Vector Machine"])
 
                 if st.sidebar.button("Train Model"):
                     with st.spinner("Training the model..."):
-                        trained_model, vectorizer, label_encoder, accuracy, report = sentiment_analysis(                                st.session_state['data'], st.session_state['text_col'],st.session_state['sentiment_col'], vectorizer_name, model_name, ngram_range
-                            )
+                        trained_model, vectorizer, label_encoder, accuracy, report = sentiment_analysis(
+                            st.session_state['data'], st.session_state['text_col'], st.session_state['sentiment_col'],
+                            vectorizer_name, model_name, ngram_range
+                        )
                         st.session_state['trained_model'] = trained_model
                         st.session_state['vectorizer'] = vectorizer
                         st.session_state['label_encoder'] = label_encoder
                         st.success("Training completed.")
-                        st.write("")
-                        st.write("")
-                        st.write("")
                         st.session_state['accuracy'] = accuracy
                         st.session_state['report'] = report
-                        st.write("")
-                        st.write("")
-                        st.write("")
-                        if report is not None:
-
-                            # accuracy_percentage = float(st.session_state['accuracy']) * 100
-                                #st.write(f"Accuracy: {accuracy_percentage:.2f}%")
-
-                                #progress_bar = st.progress(round(accuracy_percentage))
-
-                            st.write("")
-
-                                #st.write("Classification Report:")
-                                #formatted_report = format_classification_report(st.session_state['report'])
-                                #st.write(formatted_report)
-                        else:
-                            st.warning("Classification report is missing. Please check your training process.")
 
                 if 'trained_model' in st.session_state and st.session_state['trained_model'] is not None:
-                    st.write("")
-                    st.write("")
-                    st.write("")
-                    st.write("")
-
-                    #method = st.radio("Select sentiment analysis method:", ('VADER', 'TextBlob'))
                     st.subheader("Predict a new comment")
                     text_input = st.text_input("Enter text for sentiment prediction:")
                     if st.button("Predict"):
@@ -863,15 +842,11 @@ def main():
                                 st.session_state['vectorizer'], st.session_state['label_encoder'])
 
                             if prediction_proba_ml is not None:
-                                st.write("")
-                                st.write("")
-                                st.write("")
                                 visualize_sentiment_radar(prediction_proba_ml, predicted_label_ml, sentiment_score_ml)
                             else:
                                 st.error("Error in analyzing sentiment.")
                         else:
                             st.warning("Please enter some text for sentiment prediction.")
-
 
                     else:
                         st.warning("Model training failed. Please check your data and parameters.")
@@ -885,11 +860,9 @@ def main():
 
         elif option == "WordCloud":
             st.sidebar.markdown("<h4 style='color: yellow;'>Upload a mask image</h4>", unsafe_allow_html=True)
-            mask_image_file = st.sidebar.file_uploader("", type=["png", "jpg", "jpeg"])
+            mask_image_file = st.sidebar.file_uploader("Mask image", type=["png", "jpg", "jpeg"])
             if 'data' in st.session_state and st.session_state['data'] is not None:
-
                 if st.sidebar.button("Generate WordCloud"):
-
                     create_wordcloud(st.session_state['data'], st.session_state['text_col'])
 
                     if mask_image_file:
@@ -900,40 +873,16 @@ def main():
                         except Exception as e:
                             st.error(f"An error occurred: {str(e)}")
 
-
-
-
     else:
         st.warning("Please upload a dataset to proceed.")
-    st.sidebar.markdown("")
-    st.sidebar.markdown("")
+
     st.sidebar.info(
         "ℹ️ Use the sidebar to navigate between different options.\n"
         "1. **Sentiment Analysis:** Train models, predict sentiment, and view results.\n"
         "2. **WordCloud:** Generate WordCloud from text data.\n\n"
         "After selecting an option, follow the instructions to upload data, choose models, and perform actions."
     )
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
-    st.write("")
+
     st.info("Created by [Çiğdem Sıcakyüz]")
 
 if __name__ == "__main__":

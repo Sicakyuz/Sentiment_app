@@ -1,32 +1,9 @@
 # Protocol Buffers - Google's data interchange format
 # Copyright 2008 Google Inc.  All rights reserved.
-# https://developers.google.com/protocol-buffers/
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
-#
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file or at
+# https://developers.google.com/open-source/licenses/bsd
 
 """Contains routines for printing protocol messages in JSON format.
 
@@ -49,14 +26,13 @@ import json
 import math
 from operator import methodcaller
 import re
-import sys
 
 from google.protobuf.internal import type_checkers
 from google.protobuf import descriptor
+from google.protobuf import message_factory
 from google.protobuf import symbol_database
 
 
-_TIMESTAMPFOMAT = '%Y-%m-%dT%H:%M:%S'
 _INT_TYPES = frozenset([descriptor.FieldDescriptor.CPPTYPE_INT32,
                         descriptor.FieldDescriptor.CPPTYPE_UINT32,
                         descriptor.FieldDescriptor.CPPTYPE_INT64,
@@ -109,7 +85,8 @@ def MessageToJson(
         names as defined in the .proto file. If False, convert the field
         names to lowerCamelCase.
     indent: The JSON object will be pretty-printed with this indent level.
-        An indent level of 0 or negative will only insert newlines.
+        An indent level of 0 or negative will only insert newlines. If the
+        indent level is None, no newlines will be inserted.
     sort_keys: If True, then the output will be sorted by field names.
     use_integers_for_enums: If true, print integers instead of enum names.
     descriptor_pool: A Descriptor Pool for resolving types. If None use the
@@ -269,7 +246,7 @@ class _Printer(object):
 
     except ValueError as e:
       raise SerializeToJsonError(
-          'Failed to serialize {0} field: {1}.'.format(field.name, e))
+          'Failed to serialize {0} field: {1}.'.format(field.name, e)) from e
 
     return js
 
@@ -286,10 +263,11 @@ class _Printer(object):
       if enum_value is not None:
         return enum_value.name
       else:
-        if field.file.syntax == 'proto3':
+        if field.enum_type.is_closed:
+          raise SerializeToJsonError('Enum field contains an integer value '
+                                     'which can not mapped to an enum value.')
+        else:
           return value
-        raise SerializeToJsonError('Enum field contains an integer value '
-                                   'which can not mapped to an enum value.')
     elif field.cpp_type == descriptor.FieldDescriptor.CPPTYPE_STRING:
       if field.type == descriptor.FieldDescriptor.TYPE_BYTES:
         # Use base64 Data encoding for bytes
@@ -352,8 +330,14 @@ class _Printer(object):
       return None
     if which == 'list_value':
       return self._ListValueMessageToJsonObject(message.list_value)
-    if which == 'struct_value':
-      value = message.struct_value
+    if which == 'number_value':
+      value = message.number_value
+      if math.isinf(value):
+        raise ValueError('Fail to serialize Infinity for Value.number_value, '
+                         'which would parse as string_value')
+      if math.isnan(value):
+        raise ValueError('Fail to serialize NaN for Value.number_value, '
+                         'which would parse as string_value')
     else:
       value = getattr(message, which)
     oneof_descriptor = message.DESCRIPTOR.fields_by_name[which]
@@ -397,10 +381,11 @@ def _CreateMessageFromTypeUrl(type_url, descriptor_pool):
   type_name = type_url.split('/')[-1]
   try:
     message_descriptor = pool.FindMessageTypeByName(type_name)
-  except KeyError:
+  except KeyError as e:
     raise TypeError(
-        'Can not find message descriptor by type_url: {0}'.format(type_url))
-  message_class = db.GetPrototype(message_descriptor)
+        'Can not find message descriptor by type_url: {0}'.format(type_url)
+      ) from e
+  message_class = message_factory.GetMessageClass(message_descriptor)
   return message_class()
 
 
@@ -432,7 +417,7 @@ def Parse(text,
   try:
     js = json.loads(text, object_pairs_hook=_DuplicateChecker)
   except ValueError as e:
-    raise ParseError('Failed to load JSON: {0}.'.format(str(e)))
+    raise ParseError('Failed to load JSON: {0}.'.format(str(e))) from e
   return ParseDict(js, message, ignore_unknown_fields, descriptor_pool,
                    max_recursion_depth)
 
@@ -624,13 +609,19 @@ class _Parser(object):
                                          '{0}.{1}'.format(path, name)))
       except ParseError as e:
         if field and field.containing_oneof is None:
-          raise ParseError('Failed to parse {0} field: {1}.'.format(name, e))
+          raise ParseError(
+            'Failed to parse {0} field: {1}.'.format(name, e)
+          ) from e
         else:
-          raise ParseError(str(e))
+          raise ParseError(str(e)) from e
       except ValueError as e:
-        raise ParseError('Failed to parse {0} field: {1}.'.format(name, e))
+        raise ParseError(
+          'Failed to parse {0} field: {1}.'.format(name, e)
+        ) from e
       except TypeError as e:
-        raise ParseError('Failed to parse {0} field: {1}.'.format(name, e))
+        raise ParseError(
+          'Failed to parse {0} field: {1}.'.format(name, e)
+        ) from e
 
   def _ConvertAnyMessage(self, value, message, path):
     """Convert a JSON representation into Any message."""
@@ -638,14 +629,15 @@ class _Parser(object):
       return
     try:
       type_url = value['@type']
-    except KeyError:
+    except KeyError as e:
       raise ParseError(
-          '@type is missing when parsing any message at {0}'.format(path))
+        '@type is missing when parsing any message at {0}'.format(path)
+      ) from e
 
     try:
       sub_message = _CreateMessageFromTypeUrl(type_url, self.descriptor_pool)
     except TypeError as e:
-      raise ParseError('{0} at {1}'.format(e, path))
+      raise ParseError('{0} at {1}'.format(e, path)) from e
     message_descriptor = sub_message.DESCRIPTOR
     full_name = message_descriptor.full_name
     if _IsWrapperMessage(message_descriptor):
@@ -670,7 +662,7 @@ class _Parser(object):
     try:
       message.FromJsonString(value)
     except ValueError as e:
-      raise ParseError('{0} at {1}'.format(e, path))
+      raise ParseError('{0} at {1}'.format(e, path)) from e
 
   def _ConvertValueMessage(self, value, message, path):
     """Convert a JSON representation into Value message."""
@@ -794,18 +786,18 @@ def _ConvertScalarFieldValue(value, field, path, require_str=False):
         try:
           number = int(value)
           enum_value = field.enum_type.values_by_number.get(number, None)
-        except ValueError:
+        except ValueError as e:
           raise ParseError('Invalid enum value {0} for enum type {1}'.format(
-              value, field.enum_type.full_name))
+              value, field.enum_type.full_name)) from e
         if enum_value is None:
-          if field.file.syntax == 'proto3':
-            # Proto3 accepts unknown enums.
+          if field.enum_type.is_closed:
+            raise ParseError('Invalid enum value {0} for enum type {1}'.format(
+                value, field.enum_type.full_name))
+          else:
             return number
-          raise ParseError('Invalid enum value {0} for enum type {1}'.format(
-              value, field.enum_type.full_name))
       return enum_value.number
   except ParseError as e:
-    raise ParseError('{0} at {1}'.format(e, path))
+    raise ParseError('{0} at {1}'.format(e, path)) from e
 
 
 def _ConvertInteger(value):
@@ -857,7 +849,7 @@ def _ConvertFloat(value, field):
   try:
     # Assume Python compatible syntax.
     return float(value)
-  except ValueError:
+  except ValueError as e:
     # Check alternative spellings.
     if value == _NEG_INFINITY:
       return float('-inf')
@@ -866,7 +858,7 @@ def _ConvertFloat(value, field):
     elif value == _NAN:
       return float('nan')
     else:
-      raise ParseError('Couldn\'t parse float: {0}'.format(value))
+      raise ParseError('Couldn\'t parse float: {0}'.format(value)) from e
 
 
 def _ConvertBool(value, require_str):
